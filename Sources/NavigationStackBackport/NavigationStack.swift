@@ -1,30 +1,41 @@
 import SwiftUI
 
 public struct NavigationStack<Data, Root: View>: View {
-	public let body: AnyView
+	public var body: some View { makeBody() }
 
-	public init(@ViewBuilder root: () -> Root) where Data == NavigationPath {
+	private let makeBody: () -> AnyView
+}
+
+private extension NavigationStack {
+	init(erasing view: some View) {
+		makeBody = { AnyView(view) }
+	}
+}
+
+extension NavigationStack where Data == NavigationPath {
+	public init(@ViewBuilder root: () -> Root) {
 		if #available(iOS 16.0, *) {
-			body = AnyView(SwiftUI.NavigationStack(root: root))
+			self.init(erasing: SwiftUI.NavigationStack(root: root))
 		} else {
-			body = AnyView(ImplicitStateView(root: root()))
+			self.init(erasing: ImplicitStateView(root: root()))
 		}
 	}
 
-	public init(path: Binding<NavigationPath>, @ViewBuilder root: () -> Root) where Data == NavigationPath {
+	public init(path: Binding<NavigationPath>, @ViewBuilder root: () -> Root) {
 		if #available(iOS 16.0, *) {
-			body = AnyView(SwiftUI.NavigationStack(path: path.swiftUIPath, root: root))
+			self.init(erasing: SwiftUI.NavigationStack(path: path.swiftUIPath, root: root))
 		} else {
-			body = AnyView(AuthorityView(path: path.storage, root: root()))
+			self.init(erasing: AuthorityView(path: path.storage, root: root()))
 		}
 	}
+}
 
-	public init(path: Binding<Data>, @ViewBuilder root: () -> Root) where Data: MutableCollection, Data: RandomAccessCollection, Data: RangeReplaceableCollection, Data.Element: Hashable {
+extension NavigationStack where Data: MutableCollection, Data: RandomAccessCollection, Data: RangeReplaceableCollection, Data.Element: Hashable {
+	public init(path: Binding<Data>, @ViewBuilder root: () -> Root) {
 		if #available(iOS 16.0, *) {
-			body = AnyView(SwiftUI.NavigationStack(path: path, root: root))
+			self.init(erasing: SwiftUI.NavigationStack(path: path, root: root))
 		} else {
-			// TODO: implement special homogeneous NavigationPathBox?
-			body = AnyView(AuthorityView(path: Binding {
+			self.init(erasing: AuthorityView(path: Binding {
 				NavigationPathBackport(items: path.wrappedValue.map { .init(value: $0) })
 			} set: {
 				path.wrappedValue = .init($0.items.compactMap { $0.valueAs(Data.Element.self) })
@@ -53,18 +64,10 @@ private extension NavigationStack {
 			UIKitNavigation(root: root.environment(\.navigationContextId, 0), path: path)
 				.ignoresSafeArea()
 				.environment(\.navigationAuthority, authority)
-				.onPreferenceChange(DestinationIDsKey.self) { ids in
-					authority.destinationIds = ids
-				}
-				.onPreferenceChange(PresentationIDsKey.self) { ids in
-					authority.presentationIds = ids
-				}
-				.onReceive(authority.pathPopPublisher) { count in
-					path.removeLast(path.count - count)
-				}
-				.onReceive(authority.pathPushPublisher) { item in
-					path.items.append(item)
-				}
+				.onPreferenceChange(DestinationIDsKey.self) { authority.destinationIds = $0 }
+				.onPreferenceChange(PresentationIDsKey.self) { authority.presentationIds = $0 }
+				.onReceive(authority.pathPopPublisher) { path.removeLast(path.count - $0) }
+				.onReceive(authority.pathPushPublisher) { path.items.append($0) }
 		}
 	}
 }

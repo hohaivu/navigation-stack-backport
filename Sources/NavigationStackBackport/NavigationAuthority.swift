@@ -26,13 +26,16 @@ class NavigationAuthority: NSObject, ObservableObject {
 
 	private var path = NavigationPathBackport(items: [])
 	private var destinations: [Namespace.ID: Destination] = [:]
+	private var destinationsByType: [ObjectIdentifier: Destination] = [:]
 	private var presentations: [Namespace.ID: Presentation] = [:]
 	private var viewControllersCount = 1
+	private var pendingPresentationTask: Task<Void, Never>?
 }
 
 extension NavigationAuthority {
 	func update(id: Namespace.ID, destination: Destination) {
 		destinations[id] = destination
+		destinationsByType[destination.typeName] = destination
 
 		guard let viewControllers = navigationController?.viewControllers else { return }
 
@@ -58,23 +61,7 @@ extension NavigationAuthority {
 
 		guard presentation.isPresented != wasPresented else { return }
 
-		Task { @MainActor in
-			var update = NavigationUpdate(navigationController: navigationController)
-			let count = presentation.isPresented ? (index + 1) : index
-
-			update.viewControllers = Array(update.viewControllers.prefix(count))
-			if presentation.isPresented {
-				update.view(presentation.view, at: index)
-			}
-
-			update.commit()
-			viewControllersCount = update.viewControllers.count
-
-			if path.count > presentation.contextId {
-				path.items = Array(path.items.prefix(presentation.contextId))
-				pathPopPublisher.send(presentation.contextId)
-			}
-		}
+		schedulePresentationUpdate(id: id, presentation: presentation)
 	}
 
 	@MainActor func update(path: NavigationPathBackport) {
@@ -111,7 +98,40 @@ extension NavigationAuthority: UINavigationControllerDelegate {
 }
 
 private extension NavigationAuthority {
+	func schedulePresentationUpdate(id: Namespace.ID, presentation: Presentation) {
+		pendingPresentationTask?.cancel()
+
+		pendingPresentationTask = Task { @MainActor [weak self] in
+			guard let self, let navigationController = self.navigationController else { return }
+
+			let index = 1 + presentation.contextId + (self.presentationIds.lastIndex(of: id) ?? 0)
+			var update = NavigationUpdate(navigationController: navigationController)
+			let count = presentation.isPresented ? (index + 1) : index
+
+			update.viewControllers = Array(update.viewControllers.prefix(count))
+			if presentation.isPresented {
+				update.view(presentation.view, at: index)
+			}
+
+			update.commit()
+			self.viewControllersCount = update.viewControllers.count
+
+			if self.path.count > presentation.contextId {
+				self.path.items = Array(self.path.items.prefix(presentation.contextId))
+				self.pathPopPublisher.send(presentation.contextId)
+			}
+
+			self.pendingPresentationTask = nil
+		}
+	}
+
 	func view(for item: NavigationPathItem, index: Int) -> AnyView {
+		if let typeId = item.valueTypeId,
+		   let destination = destinationsByType[typeId],
+		   let view = destination.view(item, index) {
+			return view
+		}
+
 		for destination in destinations.values {
 			if let view = destination.view(item, index) {
 				return view
@@ -129,6 +149,7 @@ private extension NavigationAuthority {
 	func cleanupDestinations(_ removedIds: Set<Namespace.ID>) {
 		let removedDestinations = removedIds.map { destinations[$0] }
 		destinations = destinations.filter { destinationIds.contains($0.key) }
+		destinationsByType = Dictionary(uniqueKeysWithValues: destinations.values.map { ($0.typeName, $0) })
 
 		guard let viewControllers = navigationController?.viewControllers else { return }
 
@@ -155,5 +176,5 @@ extension EnvironmentValues {
 }
 
 private struct NavigationAuthorityKey: EnvironmentKey {
-	static var defaultValue = NavigationAuthority()
+	static var defaultValue: NavigationAuthority { NavigationAuthority() }
 }

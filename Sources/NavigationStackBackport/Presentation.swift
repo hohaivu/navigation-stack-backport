@@ -28,16 +28,15 @@ private struct PresentationModifier<C: View>: ViewModifier {
 	@Namespace private var id
 	@Environment(\.navigationContextId) private var contextId
 	@Environment(\.navigationAuthority) private var authority
+	@State private var previousIsPresented: Bool?
 
 	func body(content: Content) -> some View {
-		var updated = false
-
 		content
 			.transformPreference(PresentationIDsKey.self) { ids in
 				ids.append(id)
 
-				guard !updated else { return }
-				updated = true
+				guard previousIsPresented != isPresented else { return }
+				DispatchQueue.main.async { previousIsPresented = isPresented }
 				authority.update(id: id, presentation: Presentation(contextId: contextId, isPresented: isPresented, view: destination))
 			}
 			.onReceive(authority.presentationPopPublisher) { id in

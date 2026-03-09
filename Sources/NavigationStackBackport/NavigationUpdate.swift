@@ -34,7 +34,11 @@ import SwiftUI
 	func commit() {
 		guard changed else { return }
 
-		Task {
+		let viewControllers = self.viewControllers
+		let addedViewControllers = self.addedViewControllers
+		let navigationController = self.navigationController
+
+		DispatchQueue.main.async {
 			addedViewControllers.forEach {
 				$0.willMove(toParent: nil)
 				$0.view.removeFromSuperview()

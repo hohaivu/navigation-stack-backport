@@ -1,7 +1,11 @@
 import Foundation
 
+private let sharedEncoder = JSONEncoder()
+private let sharedDecoder = JSONDecoder()
+
 struct NavigationPathItem {
 	var isCodable: Bool { box.isCodable }
+	var valueTypeId: ObjectIdentifier? { box.valueTypeId }
 	private let box: any Box
 
 	init<V: Hashable>(value: V) {
@@ -33,6 +37,7 @@ extension NavigationPathItem: Equatable {
 
 private protocol Box {
 	var isCodable: Bool { get }
+	var valueTypeId: ObjectIdentifier? { get }
 	func valueAs<T>(_ type: T.Type) -> T?
 	func encodePair(container: inout UnkeyedEncodingContainer) throws
 	func equalsTo(_: any Box) -> Bool
@@ -42,6 +47,7 @@ private struct EagerBox<Value: Hashable>: Box {
 	let value: Value
 	let encode: ((JSONEncoder) throws -> Data)?
 	var isCodable: Bool { encode != nil }
+	var valueTypeId: ObjectIdentifier? { ObjectIdentifier(Value.self) }
 
 	init(value: Value) {
 		self.value = value
@@ -58,7 +64,7 @@ private struct EagerBox<Value: Hashable>: Box {
 	}
 
 	func encodePair(container: inout UnkeyedEncodingContainer) throws {
-		let jsonValue = String(data: try encode!(JSONEncoder()), encoding: .utf8)
+		let jsonValue = String(data: try encode!(sharedEncoder), encoding: .utf8)
 		try container.encode(_typeName(type(of: value)))
 		try container.encode(jsonValue)
 	}
@@ -70,6 +76,7 @@ private struct EagerBox<Value: Hashable>: Box {
 
 private class LazyBox: Box {
 	var isCodable: Bool { true }
+	var valueTypeId: ObjectIdentifier? { nil }
 	private let typeName: String
 	private let jsonValue: String
 	private var decodedValue: Any?
@@ -84,8 +91,9 @@ private class LazyBox: Box {
 			return decodedValue as? T
 		}
 
-		guard let decodableType = T.self as? any Decodable.Type else { return nil }
-		decodedValue = try? JSONDecoder().decode(decodableType, from: jsonValue.data(using: .utf8)!)
+		guard let decodableType = T.self as? any Decodable.Type,
+			  let data = jsonValue.data(using: .utf8) else { return nil }
+		decodedValue = try? sharedDecoder.decode(decodableType, from: data)
 		return decodedValue as? T
 	}
 
